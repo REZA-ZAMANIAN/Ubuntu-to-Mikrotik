@@ -19,39 +19,25 @@ die() {
 }
 
 # =========================================================
-# ROOT CHECK
+# BASIC CHECKS
 # =========================================================
 
-[[ $EUID -eq 0 ]] || die "Run this script as root."
-
-# =========================================================
-# ARCHITECTURE CHECK
-# =========================================================
+[[ $EUID -eq 0 ]] ||
+    die "Run this script as root."
 
 ARCH="$(uname -m)"
 
 [[ "$ARCH" == "x86_64" || "$ARCH" == "amd64" ]] ||
     die "Only x86_64/amd64 is supported."
 
-# =========================================================
-# OS CHECK
-# =========================================================
-
 [[ -x /usr/bin/apt-get ]] ||
     die "Ubuntu/Debian with apt-get is required."
-
-# =========================================================
-# SYSRQ CHECK
-# =========================================================
 
 [[ -w /proc/sysrq-trigger ]] ||
     die "/proc/sysrq-trigger is unavailable."
 
 # =========================================================
-# BIOS / SEABIOS SAFETY CHECK
-#
-# This installer is intentionally limited to the same
-# BIOS/SeaBIOS VPS profile that was successfully tested.
+# BIOS / SEABIOS CHECK
 # =========================================================
 
 if [[ -d /sys/firmware/efi ]]; then
@@ -59,7 +45,7 @@ if [[ -d /sys/firmware/efi ]]; then
 fi
 
 # =========================================================
-# REQUIRED SYSTEM COMMANDS
+# REQUIRED COMMANDS
 # =========================================================
 
 for cmd in \
@@ -73,14 +59,15 @@ for cmd in \
     grep \
     sha256sum \
     swapon \
-    swapoff
+    swapoff \
+    ldd
 do
     command -v "$cmd" >/dev/null 2>&1 ||
         die "Missing required command: $cmd"
 done
 
 # =========================================================
-# DETECT CURRENT ROOT DEVICE
+# DETECT ROOT DEVICE
 # =========================================================
 
 ROOT_SRC="$(findmnt -n -o SOURCE /)"
@@ -91,7 +78,7 @@ ROOT_SRC="$(
 )"
 
 [[ -b "$ROOT_SRC" ]] ||
-    die "Root filesystem is not on a directly detectable block device: $ROOT_SRC"
+    die "Could not detect root block device: $ROOT_SRC"
 
 ROOT_TYPE="$(
     lsblk -dn -o TYPE "$ROOT_SRC" |
@@ -100,12 +87,11 @@ ROOT_TYPE="$(
 )"
 
 # =========================================================
-# DETECT PARENT SYSTEM DISK
+# DETECT SYSTEM DISK
 #
-# Example:
-# /dev/vda1 -> /dev/vda
-# /dev/sda1 -> /dev/sda
-# /dev/nvme0n1p1 -> /dev/nvme0n1
+# /dev/vda1       -> /dev/vda
+# /dev/sda1       -> /dev/sda
+# /dev/nvme0n1p1  -> /dev/nvme0n1
 # =========================================================
 
 case "$ROOT_TYPE" in
@@ -139,17 +125,13 @@ esac
 [[ -b "$DISK" ]] ||
     die "Detected target disk does not exist: $DISK"
 
-# =========================================================
-# TARGET DISK SANITY CHECK
-# =========================================================
-
 DISK_SIZE="$(blockdev --getsize64 "$DISK")"
 
 (( DISK_SIZE >= 512*1024*1024 )) ||
     die "Detected disk is suspiciously small: $DISK"
 
 # =========================================================
-# VERIFY /dev/shm IS ACTUALLY RAM
+# VERIFY /dev/shm IS RAM
 # =========================================================
 
 SHM_FS="$(
@@ -158,7 +140,7 @@ SHM_FS="$(
 )"
 
 [[ "$SHM_FS" == "tmpfs" ]] ||
-    die "/dev/shm is not tmpfs. Refusing live installation."
+    die "/dev/shm is not tmpfs. Refusing installation."
 
 # =========================================================
 # INSTALL REQUIRED PACKAGES
@@ -178,11 +160,13 @@ apt-get install -y --no-install-recommends \
     busybox-static \
     >/dev/null
 
-[[ -x /bin/busybox ]] ||
+BUSYBOX_SRC="$(command -v busybox || true)"
+
+[[ -n "$BUSYBOX_SRC" && -x "$BUSYBOX_SRC" ]] ||
     die "busybox-static installation failed."
 
 # =========================================================
-# DETECT LATEST ROUTEROS v7 STABLE
+# DETECT LATEST ROUTEROS V7 STABLE
 # =========================================================
 
 echo
@@ -206,13 +190,13 @@ VERSION="$(
 )"
 
 # =========================================================
-# FALLBACK STABLE SERVER
+# FALLBACK VERSION SERVER
 # =========================================================
 
 if [[ ! "$VERSION" =~ ^7\.[0-9]+(\.[0-9]+)?$ ]]; then
 
     echo "==> Primary version server failed."
-    echo "==> Trying MikroTik download server..."
+    echo "==> Trying fallback server..."
 
     VERSION_RESPONSE="$(
         curl \
@@ -233,15 +217,10 @@ if [[ ! "$VERSION" =~ ^7\.[0-9]+(\.[0-9]+)?$ ]]; then
 
 fi
 
-# =========================================================
-# VERSION SAFETY VALIDATION
-#
-# Allows:
-# 7.24
-# 7.24.4
-#
-# Rejects beta / rc / garbage.
-# =========================================================
+# Accept normal RouterOS v7 Stable versions only.
+# Examples:
+#   7.24
+#   7.24.4
 
 [[ "$VERSION" =~ ^7\.[0-9]+(\.[0-9]+)?$ ]] ||
     die "Could not safely determine latest RouterOS Stable."
@@ -262,7 +241,6 @@ echo
 # =========================================================
 
 rm -rf "$WORK"
-
 mkdir -m 700 -p "$WORK"
 
 ZIP="$WORK/chr.zip"
@@ -270,12 +248,10 @@ IMG="$WORK/chr-${VERSION}.img"
 BB="$WORK/busybox"
 STAGE2="$WORK/stage2.sh"
 
-BASE="https://download.mikrotik.com"
-
-URL="${BASE}/routeros/${VERSION}/chr-${VERSION}.img.zip"
+URL="https://download.mikrotik.com/routeros/${VERSION}/chr-${VERSION}.img.zip"
 
 # =========================================================
-# DOWNLOAD CHR DIRECTLY INTO RAM
+# DOWNLOAD CHR INTO RAM
 # =========================================================
 
 echo "==> Downloading official CHR ${VERSION} into RAM..."
@@ -295,7 +271,7 @@ curl \
     die "Downloaded CHR archive is empty."
 
 # =========================================================
-# VERIFY ZIP INTEGRITY
+# VERIFY ZIP
 # =========================================================
 
 echo
@@ -307,7 +283,7 @@ unzip -t "$ZIP" >/dev/null ||
 echo "==> ZIP integrity: OK"
 
 # =========================================================
-# FIND IMAGE INSIDE ZIP
+# FIND IMAGE IN ZIP
 # =========================================================
 
 IMG_NAME="$(
@@ -342,7 +318,7 @@ NEEDED=$((EXPECTED_SIZE + 64*1024*1024))
     die "Not enough free RAM in /dev/shm."
 
 # =========================================================
-# EXTRACT IMAGE COMPLETELY INTO RAM
+# EXTRACT IMAGE INTO RAM
 # =========================================================
 
 echo
@@ -355,13 +331,16 @@ SIZE="$(stat -c '%s' "$IMG")"
 [[ "$SIZE" -eq "$EXPECTED_SIZE" ]] ||
     die "Extracted CHR image size mismatch."
 
+(( SIZE <= DISK_SIZE )) ||
+    die "CHR image is larger than target disk."
+
 echo "==> Image size verification: OK"
 
 # ZIP is no longer needed.
 rm -f "$ZIP"
 
 # =========================================================
-# CALCULATE SOURCE IMAGE HASH
+# CALCULATE SOURCE SHA256
 # =========================================================
 
 EXPECTED_HASH="$(
@@ -378,21 +357,36 @@ echo "$EXPECTED_HASH"
 
 # =========================================================
 # COPY STATIC BUSYBOX INTO RAM
-#
-# This is critical:
-# after Ubuntu is overwritten, installer commands continue
-# executing entirely from RAM.
 # =========================================================
 
-cp -f /bin/busybox "$BB"
-
+cp -L "$BUSYBOX_SRC" "$BB"
 chmod 700 "$BB"
 
-if ! ldd "$BB" 2>&1 |
-    grep -Eq 'not a dynamic executable|statically linked'
+# IMPORTANT:
+# ldd normally exits non-zero for a static executable.
+# Therefore its output must be captured independently
+# instead of relying on the ldd exit status.
+
+LDD_OUTPUT="$(
+    LC_ALL=C ldd "$BB" 2>&1 || true
+)"
+
+if ! grep -Eqi \
+    'not a dynamic executable|statically linked' \
+    <<< "$LDD_OUTPUT"
 then
+
+    echo
+    echo "ldd output:"
+    printf '%s\n' "$LDD_OUTPUT"
+    echo
+
     die "BusyBox is not static."
 fi
+
+# Make sure RAM copy itself executes.
+"$BB" true ||
+    die "BusyBox RAM copy cannot execute."
 
 echo
 echo "==> Static BusyBox: OK"
@@ -412,7 +406,7 @@ if swapon --noheadings --show 2>/dev/null | grep -q .; then
 fi
 
 # =========================================================
-# DISPLAY NETWORK INFORMATION BEFORE UBUNTU DISAPPEARS
+# DISPLAY CURRENT INFORMATION
 # =========================================================
 
 echo
@@ -432,15 +426,7 @@ ip -4 route 2>/dev/null || true
 echo
 
 # =========================================================
-# CREATE STAGE 2
-#
-# Stage 2 executes exclusively using:
-#
-#   /dev/shm
-#   static BusyBox
-#   Linux kernel
-#
-# No Ubuntu binaries are required after disk overwrite.
+# CREATE RAM-ONLY STAGE 2 INSTALLER
 # =========================================================
 
 cat > "$STAGE2" <<'STAGE2_EOF'
@@ -457,7 +443,7 @@ echo "=========================================="
 echo
 
 # =====================================================
-# FLUSH ALL EXISTING WRITES
+# FLUSH EXISTING WRITES
 # =====================================================
 
 echo "==> Flushing filesystem writes..."
@@ -479,7 +465,7 @@ echo u > /proc/sysrq-trigger
 "$BB" sleep 3
 
 # =====================================================
-# VERIFY ROOT REALLY BECAME READ-ONLY
+# VERIFY ROOT IS READ-ONLY
 # =====================================================
 
 ROOT_OPTIONS="$(
@@ -489,10 +475,12 @@ ROOT_OPTIONS="$(
 case ",$ROOT_OPTIONS," in
 
     *,ro,*)
+
         echo "==> Root filesystem: READ-ONLY"
         ;;
 
     *)
+
         echo
         echo "=========================================="
         echo "ERROR: ROOT FILESYSTEM IS STILL WRITABLE"
@@ -509,7 +497,7 @@ case ",$ROOT_OPTIONS," in
 esac
 
 # =====================================================
-# WRITE CHR IMAGE
+# WRITE CHR
 # =====================================================
 
 echo
@@ -522,7 +510,7 @@ echo
     bs=4M
 
 # =====================================================
-# FLUSH CHR IMAGE TO PHYSICAL/VIRTUAL DISK
+# FLUSH CHR TO DISK
 # =====================================================
 
 echo
@@ -533,7 +521,7 @@ echo "==> Flushing CHR image to disk..."
 "$BB" sleep 3
 
 # =====================================================
-# READ EXACT IMAGE SIZE BACK FROM DISK
+# READ DISK BACK AND VERIFY SHA256
 # =====================================================
 
 echo
@@ -589,7 +577,6 @@ fi
 # =====================================================
 
 "$BB" sync
-
 "$BB" sleep 2
 
 # =====================================================
@@ -606,12 +593,8 @@ echo "ما رفتیم بای 👋"
 echo "Power off then power on"
 echo
 
-# =====================================================
-# IMPORTANT:
-#
-# Never return to the overwritten Ubuntu environment.
-# Keep the RAM shell alive until VPS is power-cycled.
-# =====================================================
+# Never return to overwritten Ubuntu.
+# Stay alive in RAM until the VPS is power-cycled.
 
 while :; do
     "$BB" sleep 3600
@@ -622,7 +605,7 @@ STAGE2_EOF
 chmod 700 "$STAGE2"
 
 # =========================================================
-# EXPORT VARIABLES FOR RAM INSTALLER
+# EXPORT VARIABLES TO RAM STAGE
 # =========================================================
 
 export \
@@ -634,9 +617,7 @@ export \
     VERSION
 
 # =========================================================
-# START INSTALLATION AUTOMATICALLY
-#
-# FROM THIS POINT THERE IS NO CONFIRMATION.
+# START AUTOMATIC INSTALLATION
 # =========================================================
 
 echo
@@ -644,8 +625,8 @@ echo "==> All checks passed."
 echo "==> Starting MikroTik CHR installation automatically..."
 echo
 
-# Move cwd away from the disk that is about to disappear.
+# Move away from system disk.
 cd /dev/shm
 
-# Permanently replace Bash with static BusyBox shell in RAM.
+# Everything from here runs using static BusyBox from RAM.
 exec "$BB" ash "$STAGE2"
