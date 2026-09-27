@@ -9,7 +9,7 @@
 دستور زیر را با کاربر `root` اجرا کنید:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/REZA-ZAMANIAN/Ubuntu-to-Mikrotik/main/install-chr.sh -o /root/install-chr.sh && bash /root/install-chr.sh
+curl -fsSL "https://raw.githubusercontent.com/REZA-ZAMANIAN/Ubuntu-to-Mikrotik/main/install-chr.sh?ts=$(date +%s)" -o /root/install-chr.sh && bash /root/install-chr.sh
 ```
 
 بعد از اتمام نصب، این پیام نمایش داده می‌شود:
