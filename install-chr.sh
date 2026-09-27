@@ -589,7 +589,7 @@ echo " CHR $VERSION INSTALLED SUCCESSFULLY"
 echo " Disk verification: OK"
 echo "=========================================="
 echo
-echo "ما رفتیم بای 👋"
+echo "All done, bye 👋"
 echo "Power off then power on"
 echo
 
